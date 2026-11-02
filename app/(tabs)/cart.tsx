@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   FlatList,
@@ -8,6 +8,7 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  RefreshControl,
   StyleSheet,
   useWindowDimensions,
 } from 'react-native';
@@ -19,11 +20,16 @@ import {
   Tag,
   MapPin,
   X,
-  ShoppingBasket,
+  AlertCircle,
 } from 'lucide-react-native';
 import { colors, fonts } from '../../constants/theme';
 import { products, formatCurrency } from '../../constants/products';
 import { useShop } from '../../store/useShop';
+import { useAuth } from '../../contexts/AuthContext';
+import { cartService } from '../../services/cartService';
+import { orderService } from '../../services/orderService';
+import { addressService } from '../../services/addressService';
+import { Address } from '../../types/order';
 import { haptics } from '../../utils/haptics';
 import { Txt } from '../../components/Txt';
 import { Screen } from '../../components/Screen';
@@ -41,42 +47,165 @@ const MAX_PROMO_DISCOUNT = 50;
 export default function CartScreen() {
   const { width, height } = useWindowDimensions();
   const cart = useShop((s) => s.cart);
+  const summary = useShop((s) => s.summary);
+  const syncCartWithBackend = useShop((s) => s.syncCartWithBackend);
   const address = useShop((s) => s.address);
   const change = useShop((s) => s.change);
   const remove = useShop((s) => s.remove);
 
+  const [refreshing, setRefreshing] = useState(false);
   const [promoCode, setPromoCode] = useState('');
   const [promoApplied, setPromoApplied] = useState(false);
   const [promoError, setPromoError] = useState(false);
+  const [promoErrorMessage, setPromoErrorMessage] = useState('');
+  const [promoDiscountAmount, setPromoDiscountAmount] = useState(0);
   const [checkoutVisible, setCheckoutVisible] = useState(false);
+  const [isPlacingOrder, setIsPlacingOrder] = useState(false);
+  const [orderError, setOrderError] = useState<string | null>(null);
+  const [addresses, setAddresses] = useState<Address[]>([]);
+  const [selectedAddressId, setSelectedAddressId] = useState<number | null>(null);
+  const isPlacingRef = useRef(false);
 
-  const itemTotal = cart.reduce((sum, item) => {
-    const p = products.find((prod) => prod.id === item.productId);
+  const { isAuthenticated } = useAuth();
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      void syncCartWithBackend();
+    }
+  }, [isAuthenticated, syncCartWithBackend]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await syncCartWithBackend();
+    setRefreshing(false);
+  }, [syncCartWithBackend]);
+
+  const loadAddresses = useCallback(async () => {
+    try {
+      const addrs = await addressService.getAddresses();
+      setAddresses(addrs);
+      if (addrs.length > 0) {
+        const def = addrs.find((a) => a.is_default) || addrs[0];
+        setSelectedAddressId(def.id);
+      }
+    } catch {
+      // Fallback to local default
+    }
+  }, []);
+
+  const handleCheckoutPress = async () => {
+    haptics.selection();
+    if (!isAuthenticated) {
+      router.push('/(auth)/login');
+      return;
+    }
+    setOrderError(null);
+    setCheckoutVisible(true);
+    await loadAddresses();
+  };
+
+  const handlePlaceOrder = async () => {
+    if (isPlacingRef.current || isPlacingOrder) return;
+    if (cart.length === 0) {
+      setOrderError('Your basket is empty. Please add items to place an order.');
+      return;
+    }
+
+    try {
+      isPlacingRef.current = true;
+      setIsPlacingOrder(true);
+      setOrderError(null);
+
+      const createdOrder = await orderService.createOrder({
+        delivery_address_id: selectedAddressId,
+        coupon_code: promoApplied ? promoCode.trim().toUpperCase() : undefined,
+      });
+
+      setCheckoutVisible(false);
+      haptics.success();
+
+      // Refresh basket to reflect backend state (empty)
+      await syncCartWithBackend();
+
+      // Navigate to order details screen
+      router.push({
+        pathname: '/order/[orderNumber]' as any,
+        params: { orderNumber: createdOrder.order_number },
+      });
+    } catch (err: any) {
+      setOrderError(err?.message || 'Failed to place order. Please try again.');
+      haptics.selection();
+    } finally {
+      isPlacingRef.current = false;
+      setIsPlacingOrder(false);
+    }
+  };
+
+  const computedItemTotal = cart.reduce((sum, item) => {
+    if (typeof item.totalPrice === 'number') return sum + item.totalPrice;
+    const p = item.product || products.find((prod) => prod.id === item.productId);
     return sum + (p ? p.price : 0) * (item.large ? 2 : 1) * item.quantity;
   }, 0);
 
-  const savingsTotal = cart.reduce((sum, item) => {
-    const p = products.find((prod) => prod.id === item.productId);
+  const itemTotal = summary ? summary.itemTotal : computedItemTotal;
+
+  const computedSavings = cart.reduce((sum, item) => {
+    if (typeof item.totalSavings === 'number') return sum + item.totalSavings;
+    const p = item.product || products.find((prod) => prod.id === item.productId);
     return sum + (p ? p.original - p.price : 0) * (item.large ? 2 : 1) * item.quantity;
   }, 0);
 
-  const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
-  const deliveryFee = itemTotal >= FREE_DELIVERY_THRESHOLD ? 0 : STANDARD_DELIVERY_FEE;
-  const promoDiscount = promoApplied
-    ? Math.min(MAX_PROMO_DISCOUNT, Math.round(PROMO_DISCOUNT_RATE * itemTotal))
-    : 0;
-  const grandTotal = itemTotal + deliveryFee - promoDiscount;
+  const savingsTotal = summary ? summary.savingsTotal : computedSavings;
+  const totalItems = summary
+    ? summary.totalItems
+    : cart.reduce((sum, item) => sum + item.quantity, 0);
 
-  const handleApplyPromo = () => {
+  const deliveryFee = summary
+    ? summary.deliveryFee
+    : itemTotal >= FREE_DELIVERY_THRESHOLD || totalItems === 0
+    ? 0
+    : STANDARD_DELIVERY_FEE;
+
+  const promoDiscount = promoApplied ? promoDiscountAmount : 0;
+  const grandTotal = Math.max(0, itemTotal + deliveryFee - promoDiscount);
+
+  const handleApplyPromo = async () => {
     if (promoApplied) {
       setPromoApplied(false);
-      haptics.success();
-    } else if (promoCode.trim().toUpperCase() === PROMO_CODE_OFFER) {
-      setPromoApplied(true);
+      setPromoDiscountAmount(0);
       setPromoError(false);
       haptics.success();
-    } else {
-      setPromoError(true);
+      return;
+    }
+
+    const code = promoCode.trim().toUpperCase();
+    if (!code) return;
+
+    try {
+      const res = await cartService.applyCoupon(code, itemTotal);
+      if (res.valid) {
+        setPromoDiscountAmount(res.discount);
+        setPromoApplied(true);
+        setPromoError(false);
+        haptics.success();
+      } else {
+        setPromoError(true);
+        setPromoErrorMessage(res.message || 'Invalid promo code');
+      }
+    } catch (err: any) {
+      if (code === PROMO_CODE_OFFER) {
+        const fallbackDiscount = Math.min(
+          MAX_PROMO_DISCOUNT,
+          Math.round(PROMO_DISCOUNT_RATE * itemTotal)
+        );
+        setPromoDiscountAmount(fallbackDiscount);
+        setPromoApplied(true);
+        setPromoError(false);
+        haptics.success();
+      } else {
+        setPromoError(true);
+        setPromoErrorMessage(err?.message || 'Use FRESH20 to preview this offer.');
+      }
     }
   };
 
@@ -124,6 +253,14 @@ export default function CartScreen() {
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
               contentContainerStyle={styles.content}
+              refreshControl={
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={onRefresh}
+                  tintColor={colors.green}
+                  colors={[colors.green]}
+                />
+              }
               ListHeaderComponent={
                 <View style={styles.delivery}>
                   <Clock3 size={23} color={colors.green} strokeWidth={1.8} />
@@ -138,9 +275,12 @@ export default function CartScreen() {
                 </View>
               }
               renderItem={({ item }) => {
-                const prod = products.find((p) => p.id === item.productId);
+                const prod = item.product || products.find((p) => p.id === item.productId);
                 if (!prod) return null;
-                const itemPrice = prod.price * (item.large ? 2 : 1) * item.quantity;
+                const itemPrice =
+                  typeof item.totalPrice === 'number'
+                    ? item.totalPrice
+                    : prod.price * (item.large ? 2 : 1) * item.quantity;
                 const photoSize = width < 360 ? 56 : 68;
 
                 return (
@@ -255,7 +395,7 @@ export default function CartScreen() {
                     )}
                     {promoError && (
                       <Txt style={styles.promoErrorText}>
-                        Use FRESH20 to preview this offer.
+                        {promoErrorMessage || 'Use FRESH20 to preview this offer.'}
                       </Txt>
                     )}
                   </View>
@@ -315,7 +455,7 @@ export default function CartScreen() {
               </View>
               <ActionButton
                 style={styles.checkoutButton}
-                onPress={() => setCheckoutVisible(true)}
+                onPress={handleCheckoutPress}
               >
                 Checkout
               </ActionButton>
@@ -327,17 +467,20 @@ export default function CartScreen() {
           transparent
           visible={checkoutVisible}
           animationType="fade"
-          onRequestClose={() => setCheckoutVisible(false)}
+          onRequestClose={() => {
+            if (!isPlacingOrder) setCheckoutVisible(false);
+          }}
         >
           <View style={styles.backdrop}>
             <View style={styles.modal}>
               <View style={styles.modalHeading}>
                 <Txt weight="bold" style={styles.modalTitle}>
-                  Checkout preview
+                  Checkout & Place Order
                 </Txt>
                 <Pressable
                   accessibilityLabel="Close checkout"
                   hitSlop={12}
+                  disabled={isPlacingOrder}
                   onPress={() => setCheckoutVisible(false)}
                 >
                   <X size={22} color={colors.ink} />
@@ -345,33 +488,126 @@ export default function CartScreen() {
               </View>
 
               <ScrollView
-                style={{ maxHeight: height * 0.45 }}
+                style={{ maxHeight: height * 0.55 }}
                 contentContainerStyle={styles.modalScroll}
+                showsVerticalScrollIndicator={false}
               >
-                <ShoppingBasket
-                  size={38}
-                  color={colors.green}
-                  strokeWidth={1.5}
-                />
-                <Txt weight="semibold" style={styles.modalReadyTitle}>
-                  Your fresh picks are ready
-                </Txt>
-                <Txt style={styles.modalDemoNotice}>
-                  This is a shopping UI demo. No payment is taken and no order is placed.
-                </Txt>
-                <View style={[styles.total, { marginTop: 24 }]}>
-                  <Txt weight="medium">
-                    {totalItems} {totalItems === 1 ? 'item' : 'items'}
-                  </Txt>
-                  <Txt weight="bold" style={styles.modalGrandTotal}>
-                    {formatCurrency(grandTotal)}
+                {/* Delivery destination */}
+                <View style={styles.checkoutSection}>
+                  <View style={styles.checkoutSectionHeader}>
+                    <MapPin size={17} color={colors.green} />
+                    <Txt weight="semibold" style={styles.checkoutSectionTitle}>
+                      Delivery address
+                    </Txt>
+                  </View>
+                  {addresses.length > 0 ? (
+                    <View style={styles.addressPillsRow}>
+                      {addresses.map((addr) => {
+                        const isSelected = selectedAddressId === addr.id;
+                        return (
+                          <Pressable
+                            key={addr.id}
+                            style={[
+                              styles.addressOptionPill,
+                              isSelected && styles.addressOptionSelected,
+                            ]}
+                            onPress={() => {
+                              setSelectedAddressId(addr.id);
+                              haptics.selection();
+                            }}
+                          >
+                            <Txt
+                              weight={isSelected ? 'bold' : 'medium'}
+                              style={{
+                                color: isSelected ? colors.green : colors.ink,
+                                fontSize: 13,
+                              }}
+                            >
+                              {addr.name}
+                            </Txt>
+                            <Txt
+                              numberOfLines={1}
+                              style={{ color: colors.muted, fontSize: 11, marginTop: 2 }}
+                            >
+                              {addr.line}
+                            </Txt>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  ) : (
+                    <Txt style={styles.defaultAddressFallback}>
+                      Deliver to {address} · HSR Layout, Bengaluru
+                    </Txt>
+                  )}
+                </View>
+
+                {/* Delivery timeframe */}
+                <View style={styles.checkoutTimeframe}>
+                  <Clock3 size={16} color={colors.darkGreen} />
+                  <Txt weight="medium" style={styles.checkoutTimeframeText}>
+                    Instant delivery in 10–15 minutes
                   </Txt>
                 </View>
+
+                {/* Items & Charges summary */}
+                <View style={styles.checkoutSummaryCard}>
+                  <Txt weight="semibold" style={styles.checkoutSummaryTitle}>
+                    Order Summary ({totalItems} {totalItems === 1 ? 'item' : 'items'})
+                  </Txt>
+                  <View style={styles.modalBillRow}>
+                    <Txt style={styles.modalBillLabel}>Item total</Txt>
+                    <Txt weight="medium">{formatCurrency(itemTotal)}</Txt>
+                  </View>
+                  <View style={styles.modalBillRow}>
+                    <Txt style={styles.modalBillLabel}>Delivery fee</Txt>
+                    <Txt
+                      weight="medium"
+                      style={{ color: !deliveryFee ? colors.green : colors.ink }}
+                    >
+                      {deliveryFee ? formatCurrency(deliveryFee) : 'Free'}
+                    </Txt>
+                  </View>
+                  {promoApplied && (
+                    <View style={styles.modalBillRow}>
+                      <Txt style={[styles.modalBillLabel, { color: colors.green }]}>
+                        Promo savings ({promoCode.trim().toUpperCase()})
+                      </Txt>
+                      <Txt weight="medium" style={{ color: colors.green }}>
+                        −{formatCurrency(promoDiscount)}
+                      </Txt>
+                    </View>
+                  )}
+                  <View style={styles.modalTotalDivider} />
+                  <View style={styles.modalTotalRow}>
+                    <Txt weight="bold" style={{ fontSize: 15 }}>
+                      Grand total
+                    </Txt>
+                    <Txt weight="bold" style={styles.modalGrandTotal}>
+                      {formatCurrency(grandTotal)}
+                    </Txt>
+                  </View>
+                </View>
+
+                {orderError ? (
+                  <View style={styles.orderErrorBanner}>
+                    <AlertCircle size={16} color={colors.red} />
+                    <Txt style={styles.orderErrorText}>{orderError}</Txt>
+                  </View>
+                ) : null}
               </ScrollView>
 
-              <ActionButton onPress={() => setCheckoutVisible(false)}>
-                Back to basket
-              </ActionButton>
+              <View style={styles.modalFooterActions}>
+                <ActionButton
+                  onPress={handlePlaceOrder}
+                  disabled={isPlacingOrder}
+                  style={styles.modalPlaceButton}
+                >
+                  {isPlacingOrder
+                    ? 'Placing your order...'
+                    : `Pay ${formatCurrency(grandTotal)} · Place Order`}
+                </ActionButton>
+              </View>
             </View>
           </View>
         </Modal>
@@ -630,5 +866,113 @@ const styles = StyleSheet.create({
   },
   modalGrandTotal: {
     fontSize: 20,
+    color: colors.ink,
+  },
+  checkoutSection: {
+    backgroundColor: colors.white,
+    padding: 14,
+    borderRadius: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  checkoutSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 10,
+  },
+  checkoutSectionTitle: {
+    fontSize: 13,
+  },
+  addressPillsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  addressOptionPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
+    minWidth: 110,
+  },
+  addressOptionSelected: {
+    borderColor: colors.green,
+    backgroundColor: colors.softGreen,
+  },
+  defaultAddressFallback: {
+    fontSize: 12,
+    color: colors.muted,
+  },
+  checkoutTimeframe: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: colors.softGreen,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+    marginBottom: 14,
+  },
+  checkoutTimeframeText: {
+    fontSize: 12,
+    color: colors.darkGreen,
+  },
+  checkoutSummaryCard: {
+    backgroundColor: colors.white,
+    padding: 16,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginBottom: 14,
+  },
+  checkoutSummaryTitle: {
+    fontSize: 14,
+    marginBottom: 12,
+  },
+  modalBillRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  modalBillLabel: {
+    fontSize: 13,
+    color: colors.muted,
+  },
+  modalTotalDivider: {
+    height: 1,
+    backgroundColor: colors.border,
+    marginVertical: 10,
+  },
+  modalTotalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  orderErrorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#FDEEE9',
+    padding: 12,
+    borderRadius: 10,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#F6B7A8',
+  },
+  orderErrorText: {
+    fontSize: 12,
+    color: colors.red,
+    flex: 1,
+  },
+  modalFooterActions: {
+    marginTop: 8,
+  },
+  modalPlaceButton: {
+    width: '100%',
   },
 });

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
   ScrollView,
@@ -6,6 +6,7 @@ import {
   Pressable,
   Image,
   Modal,
+  RefreshControl,
   StyleSheet,
   useWindowDimensions,
 } from 'react-native';
@@ -25,11 +26,14 @@ import { colors } from '../../constants/theme';
 import {
   categories,
   Product,
+  Category,
   getFeaturedVegetables,
   getFeaturedFruits,
   getBestsellers,
   getSeasonalProduct,
 } from '../../constants/products';
+import { productService } from '../../services/productService';
+import { categoryService } from '../../services/categoryService';
 import { useShop, DeliveryAddress } from '../../store/useShop';
 import { Txt } from '../../components/Txt';
 import { Screen } from '../../components/Screen';
@@ -84,15 +88,126 @@ export default function HomeScreen() {
   const walkthroughStep = useShop((s) => s.walkthroughStep);
 
   const [locationModalVisible, setLocationModalVisible] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
 
   const fullAddress = address === 'Home' ? 'HSR Layout, Bengaluru' : 'Indiranagar, Bengaluru';
   const cardWidth = Math.max(158, Math.min(180, 0.42 * width));
 
-  const featuredVegetables = useMemo(() => getFeaturedVegetables(), []);
-  const featuredFruits = useMemo(() => getFeaturedFruits(), []);
-  const bestsellers = useMemo(() => getBestsellers(), []);
-  const seasonalProduct = useMemo(() => getSeasonalProduct(), []);
+  const [featuredVegetables, setFeaturedVegetables] = useState<Product[]>(getFeaturedVegetables);
+  const [featuredFruits, setFeaturedFruits] = useState<Product[]>(getFeaturedFruits);
+  const [bestsellers, setBestsellers] = useState<Product[]>(getBestsellers);
+  const [seasonalProduct, setSeasonalProduct] = useState<Product | undefined>(getSeasonalProduct);
+  const [quickCategories, setQuickCategories] = useState<Category[]>(QUICK_CATEGORIES);
+
+  const loadHomeData = useCallback(async (isRefresh = false) => {
+    if (isRefresh) {
+      setRefreshing(true);
+    }
+
+    try {
+      const results = await Promise.allSettled([
+        productService.getProducts({ featured: 'vegetables' }),
+        productService.getProducts({ featured: 'fruits' }),
+        productService.getBestsellers(),
+        productService.getSeasonal(),
+        categoryService.getAllCategories(),
+      ]);
+
+      const [vegRes, fruitRes, bestRes, seasonalRes, catRes] = results;
+
+      if (vegRes.status === 'fulfilled' && vegRes.value.results.length > 0) {
+        setFeaturedVegetables(vegRes.value.results);
+      }
+      if (fruitRes.status === 'fulfilled' && fruitRes.value.results.length > 0) {
+        setFeaturedFruits(fruitRes.value.results);
+      }
+      if (bestRes.status === 'fulfilled' && bestRes.value.length > 0) {
+        setBestsellers(bestRes.value);
+      }
+      if (seasonalRes.status === 'fulfilled' && seasonalRes.value.length > 0) {
+        setSeasonalProduct(seasonalRes.value[0]);
+      }
+      if (catRes.status === 'fulfilled' && catRes.value.length > 0) {
+        const allCats = catRes.value;
+        const findCat = (id: string, fallbackName?: string) => {
+          const c = allCats.find((item) => item.id === id);
+          return c ? { ...c, name: fallbackName || c.name } : null;
+        };
+        const dynamicQuick = [
+          findCat('fruits', 'Fruits'),
+          findCat('vegetables', 'Vegetables'),
+          findCat('leafy', 'Leafy greens'),
+          findCat('exotic-fruits', 'Exotic fruits'),
+        ].filter(Boolean) as Category[];
+
+        if (dynamicQuick.length === 4) {
+          setQuickCategories(dynamicQuick);
+        }
+      }
+    } catch {
+      // Keep existing data on error
+    } finally {
+      if (isRefresh) {
+        setRefreshing(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const results = await Promise.allSettled([
+          productService.getProducts({ featured: 'vegetables' }),
+          productService.getProducts({ featured: 'fruits' }),
+          productService.getBestsellers(),
+          productService.getSeasonal(),
+          categoryService.getAllCategories(),
+        ]);
+
+        if (!active) return;
+
+        const [vegRes, fruitRes, bestRes, seasonalRes, catRes] = results;
+
+        if (vegRes.status === 'fulfilled' && vegRes.value.results.length > 0) {
+          setFeaturedVegetables(vegRes.value.results);
+        }
+        if (fruitRes.status === 'fulfilled' && fruitRes.value.results.length > 0) {
+          setFeaturedFruits(fruitRes.value.results);
+        }
+        if (bestRes.status === 'fulfilled' && bestRes.value.length > 0) {
+          setBestsellers(bestRes.value);
+        }
+        if (seasonalRes.status === 'fulfilled' && seasonalRes.value.length > 0) {
+          setSeasonalProduct(seasonalRes.value[0]);
+        }
+        if (catRes.status === 'fulfilled' && catRes.value.length > 0) {
+          const allCats = catRes.value;
+          const findCat = (id: string, fallbackName?: string) => {
+            const c = allCats.find((item) => item.id === id);
+            return c ? { ...c, name: fallbackName || c.name } : null;
+          };
+          const dynamicQuick = [
+            findCat('fruits', 'Fruits'),
+            findCat('vegetables', 'Vegetables'),
+            findCat('leafy', 'Leafy greens'),
+            findCat('exotic-fruits', 'Exotic fruits'),
+          ].filter(Boolean) as Category[];
+
+          if (dynamicQuick.length === 4) {
+            setQuickCategories(dynamicQuick);
+          }
+        }
+      } catch {
+        // Fallback remains active
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const navigateToListing = (category: string) => {
     router.push({
@@ -107,6 +222,14 @@ export default function HomeScreen() {
         ref={scrollRef}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => loadHomeData(true)}
+            tintColor={colors.green}
+            colors={[colors.green]}
+          />
+        }
       >
         <View style={styles.header}>
           <View style={styles.topRow}>
@@ -181,7 +304,7 @@ export default function HomeScreen() {
           }}
         >
           <View style={styles.categories}>
-            {QUICK_CATEGORIES.map((cat) => (
+            {quickCategories.map((cat) => (
               <CategoryCard
                 key={cat.id}
                 category={

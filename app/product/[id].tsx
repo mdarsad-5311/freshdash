@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   ScrollView,
   FlatList,
   Pressable,
+  ActivityIndicator,
+  RefreshControl,
   StyleSheet,
   useWindowDimensions,
 } from 'react-native';
@@ -18,7 +20,9 @@ import {
 } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../../constants/theme';
-import { products, formatCurrency, calculateDiscount } from '../../constants/products';
+import { products as fallbackProducts, formatCurrency, calculateDiscount } from '../../constants/products';
+import { Product } from '../../types/product';
+import { productService } from '../../services/productService';
 import { useShop } from '../../store/useShop';
 import { haptics } from '../../utils/haptics';
 import { Txt } from '../../components/Txt';
@@ -33,7 +37,15 @@ export default function ProductDetailsScreen() {
   const { id } = useLocalSearchParams<{ id?: string }>();
   const { width } = useWindowDimensions();
 
-  const product = products.find((p) => p.id === id);
+  const initialFallback = id ? fallbackProducts.find((p) => p.id === id) || null : null;
+  const [product, setProduct] = useState<Product | null>(initialFallback);
+  const [pairsWellWith, setPairsWellWith] = useState<Product[]>(() =>
+    initialFallback ? fallbackProducts.filter((p) => p.id !== id).slice(0, 5) : []
+  );
+
+  const [loading, setLoading] = useState(!initialFallback);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const [isDoublePack, setIsDoublePack] = useState(false);
   const [quantity, setQuantity] = useState(1);
@@ -43,11 +55,104 @@ export default function ProductDetailsScreen() {
   const toggleFavourite = useShop((s) => s.toggleFavourite);
   const add = useShop((s) => s.add);
 
+  const loadProductData = useCallback(
+    async (isRefresh = false) => {
+      if (!id) return;
+      if (isRefresh) {
+        setRefreshing(true);
+      } else if (!product) {
+        setLoading(true);
+      }
+      setError(null);
+
+      try {
+        const [prodResult, pairsResult] = await Promise.allSettled([
+          productService.getProduct(id),
+          productService.getPairsWellWith(id),
+        ]);
+
+        if (prodResult.status === 'fulfilled') {
+          setProduct(prodResult.value);
+        } else if (!product) {
+          setError(prodResult.reason?.message || 'Product not found');
+        }
+
+        if (pairsResult.status === 'fulfilled' && pairsResult.value.length > 0) {
+          setPairsWellWith(pairsResult.value);
+        }
+      } catch (err: any) {
+        if (!product) {
+          setError(err?.message || 'Product not found');
+        }
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [id, product]
+  );
+
+  useEffect(() => {
+    let active = true;
+    if (!id) return;
+
+    (async () => {
+      try {
+        const [prodResult, pairsResult] = await Promise.allSettled([
+          productService.getProduct(id),
+          productService.getPairsWellWith(id),
+        ]);
+
+        if (!active) return;
+
+        if (prodResult.status === 'fulfilled') {
+          setProduct(prodResult.value);
+          setError(null);
+        } else if (!initialFallback) {
+          setError(prodResult.reason?.message || 'Product not found');
+        }
+
+        if (pairsResult.status === 'fulfilled' && pairsResult.value.length > 0) {
+          setPairsWellWith(pairsResult.value);
+        }
+      } catch (err: any) {
+        if (active && !initialFallback) {
+          setError(err?.message || 'Product not found');
+        }
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [id, initialFallback]);
+
+  if (loading && !product) {
+    return (
+      <SafeAreaView edges={['bottom']} style={styles.screen}>
+        <Stack.Screen
+          options={{
+            title: 'Fresh picks',
+            headerBackButtonDisplayMode: 'minimal',
+          }}
+        />
+        <View style={styles.centerContainer}>
+          <ActivityIndicator size="large" color={colors.green} />
+          <Txt style={styles.statusText}>Loading product details...</Txt>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   if (!product) {
     return (
       <EmptyState
         title="Product not found"
-        message="Find something fresh in our collection."
+        message={error || 'Find something fresh in our collection.'}
         action="Browse produce"
         onPress={() => router.replace('/categories')}
       />
@@ -61,7 +166,6 @@ export default function ProductDetailsScreen() {
   const totalPrice = unitPrice * quantity;
 
   const photoSize = Math.min(width - 40, 330);
-  const pairsWellWith = products.filter((p) => p.id !== id).slice(0, 5);
 
   const handleAddToCart = () => {
     if (addedToCart) {
@@ -76,7 +180,7 @@ export default function ProductDetailsScreen() {
     <SafeAreaView edges={['bottom']} style={styles.screen}>
       <Stack.Screen
         options={{
-          title: 'Fresh picks',
+          title: product.category_name || 'Fresh picks',
           headerBackButtonDisplayMode: 'minimal',
           headerRight: () => (
             <Pressable
@@ -93,6 +197,14 @@ export default function ProductDetailsScreen() {
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => loadProductData(true)}
+            tintColor={colors.green}
+            colors={[colors.green]}
+          />
+        }
       >
         <View style={styles.photoContainer}>
           <ProducePhoto index={product.photo} size={photoSize} />
@@ -221,15 +333,19 @@ export default function ProductDetailsScreen() {
           </View>
         </View>
 
-        <SectionTitle title="Pairs well with" />
-        <FlatList
-          horizontal
-          data={pairsWellWith}
-          keyExtractor={(item) => item.id}
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.pairsShelf}
-          renderItem={({ item }) => <ProductCard product={item} width={165} />}
-        />
+        {pairsWellWith.length > 0 && (
+          <>
+            <SectionTitle title="Pairs well with" />
+            <FlatList
+              horizontal
+              data={pairsWellWith}
+              keyExtractor={(item) => item.id}
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.pairsShelf}
+              renderItem={({ item }) => <ProductCard product={item} width={165} />}
+            />
+          </>
+        )}
       </ScrollView>
 
       <View style={styles.footer}>
@@ -269,81 +385,95 @@ const styles = StyleSheet.create({
   },
   heartButton: {
     position: 'absolute',
-    right: 22,
-    top: 16,
-    padding: 9,
-    borderRadius: 50,
-    backgroundColor: colors.background,
+    top: 14,
+    right: 18,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.white,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
+    shadowColor: colors.ink,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
   },
   deliveryBadge: {
+    position: 'absolute',
+    bottom: 14,
+    left: 18,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    position: 'absolute',
-    left: 20,
-    bottom: 16,
-    paddingHorizontal: 9,
-    paddingVertical: 6,
+    gap: 6,
     backgroundColor: colors.softGreen,
-    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20,
   },
   deliveryText: {
-    fontSize: 11,
     color: colors.darkGreen,
+    fontSize: 12,
   },
   info: {
-    paddingHorizontal: 20,
-    paddingTop: 23,
+    padding: 20,
+    backgroundColor: colors.white,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    marginTop: -16,
   },
   name: {
-    fontSize: 23,
-    lineHeight: 30,
+    fontSize: 22,
+    marginBottom: 4,
     letterSpacing: -0.5,
   },
   weight: {
+    fontSize: 14,
     color: colors.muted,
-    fontSize: 13,
-    marginTop: 6,
+    marginBottom: 12,
   },
   priceRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 11,
-    marginTop: 17,
+    alignItems: 'baseline',
+    gap: 10,
+    marginBottom: 20,
   },
   price: {
-    fontSize: 25,
+    fontSize: 26,
+    color: colors.ink,
   },
   original: {
+    fontSize: 16,
     color: colors.muted,
-    fontSize: 15,
     textDecorationLine: 'line-through',
   },
   discount: {
     backgroundColor: colors.softGreen,
-    paddingVertical: 5,
     paddingHorizontal: 8,
+    paddingVertical: 3,
     borderRadius: 6,
   },
   discountText: {
-    fontSize: 12,
     color: colors.green,
+    fontSize: 12,
   },
   heading: {
-    fontSize: 15,
-    marginTop: 26,
+    fontSize: 16,
     marginBottom: 12,
   },
   weights: {
     flexDirection: 'row',
     gap: 12,
+    marginBottom: 24,
   },
   weightOption: {
     flex: 1,
-    borderWidth: 1,
-    borderColor: colors.border,
+    padding: 14,
     borderRadius: 12,
-    padding: 16,
+    borderWidth: 1.5,
+    borderColor: colors.border,
     backgroundColor: colors.white,
     position: 'relative',
   },
@@ -352,75 +482,88 @@ const styles = StyleSheet.create({
     backgroundColor: colors.softGreen,
   },
   weightPrice: {
-    marginTop: 7,
-    color: colors.muted,
     fontSize: 12,
+    color: colors.muted,
+    marginTop: 2,
   },
   checkIcon: {
     position: 'absolute',
-    top: 8,
-    right: 8,
+    top: 10,
+    right: 10,
   },
   quality: {
     flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
     backgroundColor: colors.softGreen,
     borderRadius: 12,
-    marginTop: 25,
-    gap: 12,
+    padding: 14,
+    marginBottom: 24,
+    alignItems: 'center',
   },
   qualityItem: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 7,
-  },
-  qualityText: {
-    fontSize: 11,
-    color: colors.darkGreen,
-    flexShrink: 1,
+    justifyContent: 'center',
+    gap: 8,
   },
   qualityDivider: {
-    height: 22,
     width: 1,
+    height: 24,
     backgroundColor: colors.border,
   },
-  description: {
+  qualityText: {
     fontSize: 13,
-    lineHeight: 22,
+    color: colors.darkGreen,
+  },
+  description: {
+    fontSize: 14,
     color: colors.muted,
+    lineHeight: 21,
+    marginBottom: 24,
   },
   quantityRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 25,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
   },
   pairsShelf: {
     paddingHorizontal: 20,
-    gap: 12,
+    paddingBottom: 20,
+    gap: 14,
   },
   footer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingTop: 14,
-    paddingBottom: 14,
+    paddingVertical: 14,
     backgroundColor: colors.white,
     borderTopWidth: 1,
     borderTopColor: colors.border,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 28,
   },
   footerPacks: {
+    fontSize: 12,
     color: colors.muted,
-    fontSize: 11,
   },
   footerPrice: {
     fontSize: 20,
-    marginTop: 4,
+    color: colors.ink,
   },
   footerButton: {
+    flex: 0.6,
+  },
+  centerContainer: {
     flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+    gap: 12,
+  },
+  statusText: {
+    color: colors.muted,
+    fontSize: 14,
   },
 });

@@ -9,6 +9,7 @@ import {
   Inter_700Bold,
 } from '@expo-google-fonts/inter';
 import { colors, fonts } from '../constants/theme';
+import { AuthProvider } from '../contexts/AuthContext';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -31,43 +32,51 @@ export default function RootLayout() {
   }
 
   return (
-    <Stack
-      screenOptions={{
-        headerStyle: { backgroundColor: colors.background },
-        headerTintColor: colors.ink,
-        headerTitleStyle: {
-          fontFamily: fonts.semibold,
-          fontSize: 17,
-        },
-        headerShadowVisible: false,
-        contentStyle: { backgroundColor: colors.background },
-      }}
-    >
-      <Stack.Screen
-        name="(tabs)"
-        options={{
-          title: 'Home',
-          headerShown: false,
+    <AuthProvider>
+      <Stack
+        screenOptions={{
+          headerStyle: { backgroundColor: colors.background },
+          headerTintColor: colors.ink,
+          headerTitleStyle: {
+            fontFamily: fonts.semibold,
+            fontSize: 17,
+          },
+          headerShadowVisible: false,
+          contentStyle: { backgroundColor: colors.background },
         }}
-      />
-      <Stack.Screen
-        name="listing"
-        options={{
-          title: 'Fresh produce',
-        }}
-      />
-      <Stack.Screen
-        name="product/[id]"
-        options={{
-          title: 'Product details',
-        }}
-      />
-      <Stack.Screen
-        name="profile-section"
-        options={{
-          title: 'Profile',
-        }}
-      />
-    </Stack>
+      >
+        <Stack.Screen
+          name="(tabs)"
+          options={{
+            title: 'Home',
+            headerShown: false,
+          }}
+        />
+        <Stack.Screen
+          name="(auth)"
+          options={{
+            headerShown: false,
+          }}
+        />
+        <Stack.Screen
+          name="listing"
+          options={{
+            title: 'Fresh produce',
+          }}
+        />
+        <Stack.Screen
+          name="product/[id]"
+          options={{
+            title: 'Product details',
+          }}
+        />
+        <Stack.Screen
+          name="profile-section"
+          options={{
+            title: 'Profile',
+          }}
+        />
+      </Stack>
+    </AuthProvider>
   );
 }

@@ -1,22 +1,5 @@
-export interface Product {
-  id: string;
-  name: string;
-  weight: string;
-  price: number;
-  original: number;
-  photo: number;
-  category: string;
-  popular?: boolean;
-  organic?: boolean;
-  description: string;
-}
-
-export interface Category {
-  id: string;
-  name: string;
-  photo: number;
-  tint: string;
-}
+import { Product, Category } from '../types/product';
+export type { Product, Category };
 
 export const products: Product[] = [
   {
