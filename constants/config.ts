@@ -15,8 +15,7 @@ const getDefaultApiBaseUrl = (): string => {
 
   // In production builds (!__DEV__), never use localhost or private emulator loopback IPs
   if (!__DEV__) {
-    // Default production endpoint placeholder (override with EXPO_PUBLIC_API_URL during EAS/production builds)
-    return 'https://api.freshdash.com/api/v1';
+    return 'https://mdarsad5311.pythonanywhere.com/api/v1';
   }
 
   // Development environment:

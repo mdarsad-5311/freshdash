@@ -42,10 +42,16 @@
       ],
       "expo-font",
       "expo-status-bar",
-      "expo-web-browser"
+      "expo-web-browser",
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "72fdb8da-e836-42b0-95c8-010b8f027726"
+      }
     }
   }
 }
