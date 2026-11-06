@@ -9,9 +9,6 @@ import {
 import { PaginatedResponse } from '../types/api';
 
 export const favoriteService = {
-  /**
-   * Fetch all saved favorite products for the currently authenticated user.
-   */
   async getFavorites(): Promise<Product[]> {
     try {
       const response = await api.get<PaginatedResponse<RawFavoriteItem> | RawFavoriteItem[]>(
@@ -20,14 +17,12 @@ export const favoriteService = {
 
       const data = response.data;
 
-      // Standard DRF paginated response
       if (data && typeof data === 'object' && 'results' in data && Array.isArray(data.results)) {
         return data.results
           .filter((item) => item && item.product)
           .map((item) => transformProduct(item.product));
       }
 
-      // Flat array fallback
       if (Array.isArray(data)) {
         return data
           .filter((item) => item && item.product)
@@ -40,10 +35,6 @@ export const favoriteService = {
     }
   },
 
-  /**
-   * Toggle favorite state for a given product ID on the backend.
-   * Returns whether the product is now favorited.
-   */
   async toggleFavorite(productId: string): Promise<ToggleFavoriteResult> {
     try {
       const response = await api.post<RawToggleFavoriteResponse>(
@@ -62,4 +53,3 @@ export const favoriteService = {
     }
   },
 };
-

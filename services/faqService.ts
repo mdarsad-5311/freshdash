@@ -4,9 +4,6 @@ import { FAQItem, RawFAQItem, transformFAQ } from '../types/faq';
 import { PaginatedResponse } from '../types/api';
 
 export const faqService = {
-  /**
-   * Fetch frequently asked questions for Help & Support.
-   */
   async getFAQs(): Promise<FAQItem[]> {
     try {
       const response = await api.get<PaginatedResponse<RawFAQItem> | RawFAQItem[]>(
@@ -15,12 +12,10 @@ export const faqService = {
 
       const data = response.data;
 
-      // Standard DRF paginated response
       if (data && typeof data === 'object' && 'results' in data && Array.isArray(data.results)) {
         return data.results.map(transformFAQ);
       }
 
-      // Flat array fallback
       if (Array.isArray(data)) {
         return data.map(transformFAQ);
       }
@@ -31,4 +26,3 @@ export const faqService = {
     }
   },
 };
-

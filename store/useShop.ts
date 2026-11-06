@@ -308,9 +308,6 @@ export const useShop = create<ShopState>((set, get) => ({
     }
   },
 
-  /**
-   * Clears user favorite state (e.g. on logout).
-   */
   resetFavourites: () => {
     set({
       favourites: [],
@@ -320,10 +317,6 @@ export const useShop = create<ShopState>((set, get) => ({
     });
   },
 
-  /**
-   * Toggles product in favorites.
-   * Optimistically updates UI, then synchronizes with backend if authenticated.
-   */
   toggleFavourite: async (productId: string, productObj?: Product) => {
     if (pendingFavoriteRequests.has(productId)) {
       return;
