@@ -12,6 +12,7 @@ export interface PaginatedOrdersResponse {
   count: number;
   total_pages?: number;
   current_page?: number;
+  page_size?: number;
   next: string | null;
   previous: string | null;
   results: AdminOrderListItem[];

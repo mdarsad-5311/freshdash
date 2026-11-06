@@ -14,6 +14,8 @@ export interface Product {
   popular?: boolean;
   organic?: boolean;
   description: string;
+  image?: string | null;
+  stock?: number;
   discount_percentage?: number;
   is_available?: boolean;
 }
@@ -23,6 +25,7 @@ export interface Category {
   name: string;
   photo: number;
   tint: string;
+  image?: string | null;
   is_active?: boolean;
   products_count?: number;
 }
@@ -43,6 +46,8 @@ export interface RawProductResponse {
   popular?: boolean;
   organic?: boolean;
   description: string;
+  image?: string | null;
+  stock?: number;
   is_available?: boolean;
   created_at?: string;
   updated_at?: string;
@@ -56,6 +61,7 @@ export interface RawCategoryResponse {
   name: string;
   photo: number;
   tint: string;
+  image?: string | null;
   is_active?: boolean;
   products_count?: number;
   created_at?: string;
@@ -100,6 +106,8 @@ export function transformProduct(raw: RawProductResponse): Product {
     popular: Boolean(raw.popular),
     organic: Boolean(raw.organic),
     description: raw.description || '',
+    image: raw.image || null,
+    stock: typeof raw.stock === 'number' ? raw.stock : undefined,
     discount_percentage:
       typeof raw.discount_percentage === 'number'
         ? raw.discount_percentage
@@ -119,6 +127,7 @@ export function transformCategory(raw: RawCategoryResponse): Category {
     name: raw.name,
     photo: typeof raw.photo === 'number' ? raw.photo : 0,
     tint: raw.tint || '#EEF4E8',
+    image: raw.image || null,
     is_active: raw.is_active !== false,
     products_count: typeof raw.products_count === 'number' ? raw.products_count : 0,
   };

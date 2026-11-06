@@ -116,8 +116,11 @@ export function getPaymentStatusBadge(status: string) {
 }
 
 export function getStockBadge(isAvailable: boolean, stock: number) {
-  if (stock === 0 || !isAvailable) {
+  if (stock === 0) {
     return <Badge variant="danger" dot>Out of Stock (0)</Badge>;
+  }
+  if (!isAvailable) {
+    return <Badge variant="neutral" dot>Hidden ({stock})</Badge>;
   }
   if (stock <= 10) {
     return <Badge variant="warning" dot>Low Stock ({stock})</Badge>;

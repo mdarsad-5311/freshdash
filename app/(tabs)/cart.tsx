@@ -293,7 +293,7 @@ export default function CartScreen() {
                         })
                       }
                     >
-                      <ProducePhoto index={prod.photo} size={photoSize} />
+                      <ProducePhoto index={prod.photo} size={photoSize} imageUrl={prod.image} />
                     </Pressable>
 
                     <View style={styles.itemInfo}>

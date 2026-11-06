@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   ScrollView,
@@ -46,6 +46,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { orderService } from '../services/orderService';
 import { addressService } from '../services/addressService';
 import { profileService } from '../services/profileService';
+import { faqService } from '../services/faqService';
+import { FAQItem } from '../types/faq';
 import { Order, OrderStatus, Address } from '../types/order';
 import { haptics } from '../utils/haptics';
 import { Txt } from '../components/Txt';
@@ -55,18 +57,24 @@ import { ActionButton } from '../components/ActionButton';
 
 const ADDRESS_LABEL_OPTIONS = ['Home', 'Work', 'Other'] as const;
 
-const FAQS = [
+const FALLBACK_FAQS: FAQItem[] = [
   {
-    q: 'How does FreshDash work?',
-    a: 'Browse farm-fresh fruits, vegetables and greens. Add items to your basket and experience instant delivery in 10–15 minutes.',
+    id: 1,
+    question: 'How does FreshDash work?',
+    answer: 'Browse farm-fresh fruits, vegetables and greens. Add items to your basket and experience instant delivery in 10–15 minutes.',
+    order: 1,
   },
   {
-    q: 'Will checking out place a real order?',
-    a: 'Yes, checkout places an order with our verified farm-fresh inventory system and gives you live tracking.',
+    id: 2,
+    question: 'Will checking out place a real order?',
+    answer: 'Yes, checkout places an order with our verified farm-fresh inventory system and gives you live tracking.',
+    order: 2,
   },
   {
-    q: 'Can I change my delivery address?',
-    a: 'Yes, switch between your saved Home and Work addresses from the address selector on the Home screen or in this section.',
+    id: 3,
+    question: 'Can I change my delivery address?',
+    answer: 'Yes, switch between your saved Home and Work addresses from the address selector on the Home screen or in this section.',
+    order: 3,
   },
 ];
 
@@ -75,6 +83,9 @@ export default function ProfileSectionScreen() {
   const { width } = useWindowDimensions();
 
   const favourites = useShop((s) => s.favourites);
+  const favouriteProducts = useShop((s) => s.favouriteProducts);
+  const isLoadingFavourites = useShop((s) => s.isLoadingFavourites);
+  const syncFavouritesWithBackend = useShop((s) => s.syncFavouritesWithBackend);
   const currentAddress = useShop((s) => s.address);
   const setShopAddress = useShop((s) => s.setAddress);
   const { user, isAuthenticated, isLoading: authLoading, updateProfile, refreshProfile } = useAuth();
@@ -95,6 +106,12 @@ export default function ProfileSectionScreen() {
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
   const [codeCopied, setCodeCopied] = useState(false);
 
+  // FAQs State (Dynamic from GET /faqs/)
+  const [faqs, setFaqs] = useState<FAQItem[]>(FALLBACK_FAQS);
+  const [loadingFaqs, setLoadingFaqs] = useState(false);
+  const [refreshingFaqs, setRefreshingFaqs] = useState(false);
+  const [faqsError, setFaqsError] = useState<string | null>(null);
+
   // Orders State
   const [orders, setOrders] = useState<Order[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
@@ -108,6 +125,9 @@ export default function ProfileSectionScreen() {
   const [settingDefaultId, setSettingDefaultId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
 
+  // Favorites pull-to-refresh state
+  const [refreshingFavourites, setRefreshingFavourites] = useState(false);
+
   // Add / Edit Address Modal State
   const [addressModalVisible, setAddressModalVisible] = useState(false);
   const [editingAddress, setEditingAddress] = useState<Address | null>(null);
@@ -118,7 +138,13 @@ export default function ProfileSectionScreen() {
   const [savingAddress, setSavingAddress] = useState(false);
   const [addressModalError, setAddressModalError] = useState<string | null>(null);
 
-  const favProducts = products.filter((p) => favourites.includes(p.id));
+  // Rich products for favorites: prioritize backend objects, fallback to local catalogue
+  const favProducts = useMemo(() => {
+    if (favouriteProducts.length > 0) {
+      return favouriteProducts;
+    }
+    return products.filter((p) => favourites.includes(p.id));
+  }, [favouriteProducts, favourites]);
   const cardWidth = (width - 52) / 2;
 
   const fetchOrders = useCallback(async (isRefresh = false) => {
@@ -155,6 +181,30 @@ export default function ProfileSectionScreen() {
     } finally {
       setLoadingAddresses(false);
       setRefreshingAddresses(false);
+    }
+  }, []);
+
+  const fetchFaqs = useCallback(async (isRefresh = false) => {
+    if (isRefresh) {
+      setRefreshingFaqs(true);
+    } else {
+      setLoadingFaqs(true);
+    }
+    setFaqsError(null);
+
+    try {
+      const list = await faqService.getFAQs();
+      if (list && list.length > 0) {
+        setFaqs(list);
+      } else {
+        setFaqs(FALLBACK_FAQS);
+      }
+    } catch (err: any) {
+      setFaqsError(err?.message || 'Failed to load FAQs.');
+      setFaqs((prev) => (prev.length > 0 ? prev : FALLBACK_FAQS));
+    } finally {
+      setLoadingFaqs(false);
+      setRefreshingFaqs(false);
     }
   }, []);
 
@@ -215,11 +265,15 @@ export default function ProfileSectionScreen() {
           // Keep current values
         }
       })();
+    } else if (section === 'Help and support') {
+      void fetchFaqs();
+    } else if (section === 'Favourite products' && isAuthenticated) {
+      void syncFavouritesWithBackend();
     }
     return () => {
       active = false;
     };
-  }, [section, isAuthenticated]);
+  }, [section, isAuthenticated, fetchFaqs, syncFavouritesWithBackend]);
 
   // Profile Save
   const handleSaveProfile = async () => {
@@ -508,18 +562,39 @@ export default function ProfileSectionScreen() {
           keyExtractor={(item) => item.id}
           columnWrapperStyle={styles.favColumnWrapper}
           contentContainerStyle={styles.favListContent}
+          refreshControl={
+            isAuthenticated ? (
+              <RefreshControl
+                refreshing={refreshingFavourites}
+                onRefresh={async () => {
+                  setRefreshingFavourites(true);
+                  await syncFavouritesWithBackend();
+                  setRefreshingFavourites(false);
+                }}
+                tintColor={colors.green}
+                colors={[colors.green]}
+              />
+            ) : undefined
+          }
           renderItem={({ item }) => (
             <View style={styles.favCardWrapper}>
               <ProductCard product={item} width={cardWidth} />
             </View>
           )}
           ListEmptyComponent={
-            <EmptyState
-              title="Save your fresh favourites"
-              message="Tap the heart on a product to find it here."
-              action="Explore produce"
-              onPress={() => router.push('/categories')}
-            />
+            isLoadingFavourites ? (
+              <View style={{ paddingVertical: 60, alignItems: 'center', justifyContent: 'center' }}>
+                <ActivityIndicator size="large" color={colors.green} />
+                <Txt style={{ marginTop: 12, color: colors.muted }}>Loading your favourites...</Txt>
+              </View>
+            ) : (
+              <EmptyState
+                title="Save your fresh favourites"
+                message="Tap the heart on a product to find it here."
+                action="Explore produce"
+                onPress={() => router.push('/categories')}
+              />
+            )
           }
         />
       ) : (
@@ -527,20 +602,24 @@ export default function ProfileSectionScreen() {
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
           refreshControl={
-            (section === 'My orders' || section === 'Saved addresses' || section === 'Profile details') &&
-            isAuthenticated ? (
+            ((section === 'My orders' || section === 'Saved addresses' || section === 'Profile details') &&
+            isAuthenticated) ||
+            section === 'Help and support' ? (
               <RefreshControl
                 refreshing={
                   section === 'My orders'
                     ? refreshingOrders
                     : section === 'Saved addresses'
                     ? refreshingAddresses
-                    : refreshingProfile
+                    : section === 'Profile details'
+                    ? refreshingProfile
+                    : refreshingFaqs
                 }
                 onRefresh={() => {
                   if (section === 'My orders') void fetchOrders(true);
                   else if (section === 'Saved addresses') void fetchAddresses(true);
                   else if (section === 'Profile details') void handleRefreshProfile();
+                  else if (section === 'Help and support') void fetchFaqs(true);
                 }}
                 tintColor={colors.green}
                 colors={[colors.green]}
@@ -929,33 +1008,48 @@ export default function ProfileSectionScreen() {
               <Txt weight="bold" style={styles.faqTitle}>
                 Frequently Asked Questions
               </Txt>
-              {FAQS.map((faq, index) => {
-                const isExpanded = expandedFaq === index;
-                return (
-                  <Pressable
-                    key={faq.q}
-                    style={styles.faq}
-                    onPress={() => {
-                      setExpandedFaq(isExpanded ? null : index);
-                      haptics.selection();
-                    }}
-                  >
-                    <View style={styles.row}>
-                      <Txt weight="semibold" style={styles.faqQ}>
-                        {faq.q}
-                      </Txt>
-                      <ChevronDown
-                        size={18}
-                        color={colors.muted}
-                        style={{
-                          transform: [{ rotate: isExpanded ? '180deg' : '0deg' }],
-                        }}
-                      />
-                    </View>
-                    {isExpanded && <Txt style={styles.faqA}>{faq.a}</Txt>}
-                  </Pressable>
-                );
-              })}
+
+              {loadingFaqs && faqs.length === 0 ? (
+                <View style={{ paddingVertical: 40, alignItems: 'center', justifyContent: 'center' }}>
+                  <ActivityIndicator size="large" color={colors.green} />
+                  <Txt style={{ marginTop: 12, color: colors.muted }}>Loading questions...</Txt>
+                </View>
+              ) : faqs.length === 0 ? (
+                <EmptyState
+                  title="No questions found"
+                  message="Check back soon for freshly updated answers to your questions."
+                  action="Back to home"
+                  onPress={() => router.push('/')}
+                />
+              ) : (
+                faqs.map((faq, index) => {
+                  const isExpanded = expandedFaq === index;
+                  return (
+                    <Pressable
+                      key={faq.id || faq.question}
+                      style={styles.faq}
+                      onPress={() => {
+                        setExpandedFaq(isExpanded ? null : index);
+                        haptics.selection();
+                      }}
+                    >
+                      <View style={styles.row}>
+                        <Txt weight="semibold" style={styles.faqQ}>
+                          {faq.question}
+                        </Txt>
+                        <ChevronDown
+                          size={18}
+                          color={colors.muted}
+                          style={{
+                            transform: [{ rotate: isExpanded ? '180deg' : '0deg' }],
+                          }}
+                        />
+                      </View>
+                      {isExpanded && <Txt style={styles.faqA}>{faq.answer}</Txt>}
+                    </Pressable>
+                  );
+                })
+              )}
             </>
           )}
 

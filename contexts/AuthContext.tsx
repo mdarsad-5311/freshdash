@@ -52,6 +52,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             if (mounted) {
               setUser(freshUser);
               void useShop.getState().syncCartWithBackend();
+              void useShop.getState().syncFavouritesWithBackend();
             }
           } catch {
             // Token expired or invalid; session will be cleared by interceptor if refresh fails
@@ -71,6 +72,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (mounted) {
         setUser(null);
         useShop.getState().resetCart();
+        useShop.getState().resetFavourites();
       }
     });
 
@@ -90,6 +92,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(currentUser);
     }
     void useShop.getState().syncCartWithBackend();
+    void useShop.getState().syncFavouritesWithBackend();
   }, []);
 
   const signup = useCallback(async (payload: SignupPayload) => {
@@ -101,6 +104,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(currentUser);
     }
     void useShop.getState().syncCartWithBackend();
+    void useShop.getState().syncFavouritesWithBackend();
   }, []);
 
   const logout = useCallback(async () => {
@@ -109,6 +113,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setUser(null);
       useShop.getState().resetCart();
+      useShop.getState().resetFavourites();
     }
   }, []);
 

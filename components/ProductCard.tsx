@@ -34,7 +34,7 @@ export function ProductCard({ product, width }: ProductCardProps) {
     <View style={[styles.product, { width }]}>
       <Pressable accessibilityLabel={`View ${product.name}`} onPress={handleOpen}>
         <View style={styles.photoArea}>
-          <ProducePhoto index={product.photo} size={photoSize} />
+          <ProducePhoto index={product.photo} size={photoSize} imageUrl={product.image} />
           {discount > 0 && (
             <View style={styles.discount}>
               <Txt weight="semibold" style={styles.discountText}>

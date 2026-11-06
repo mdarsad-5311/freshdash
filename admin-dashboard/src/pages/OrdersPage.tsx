@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Search,
   ShoppingBag,
@@ -7,6 +8,8 @@ import {
   Truck,
   MapPin,
   Clock,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { orderService } from '../services/orderService';
 import {
@@ -14,6 +17,7 @@ import {
   AdminOrderListItem,
   OrderFilterParams,
   OrderStatus,
+  PaymentMethod,
   PaymentStatus,
 } from '../types/order';
 import { LoadingSpinner } from '../components/common/LoadingSpinner';
@@ -39,19 +43,45 @@ const PAYMENT_STATUS_OPTIONS: Array<{ value: PaymentStatus; label: string }> = [
   { value: 'refunded', label: 'Refunded' },
 ];
 
+const PAYMENT_METHOD_OPTIONS: Array<{ value: PaymentMethod; label: string }> = [
+  { value: 'COD', label: 'Cash on Delivery' },
+  { value: 'UPI', label: 'UPI Payment' },
+  { value: 'Card', label: 'Credit / Debit Card' },
+  { value: 'NetBanking', label: 'Net Banking' },
+  { value: 'Wallet', label: 'Digital Wallet' },
+];
+
+const ORDERING_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: '-created_at', label: 'Newest First' },
+  { value: 'created_at', label: 'Oldest First' },
+  { value: '-grand_total', label: 'Amount: High to Low' },
+  { value: 'grand_total', label: 'Amount: Low to High' },
+];
+
 export const OrdersPage: React.FC = () => {
   const [orders, setOrders] = useState<AdminOrderListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  // Filters
-  const [search, setSearch] = useState('');
+  const [searchParams] = useSearchParams();
+  const urlSearch = searchParams.get('search') || '';
+
+  // Filters & Sorting state
+  const [search, setSearch] = useState(urlSearch);
+  const [debouncedSearch, setDebouncedSearch] = useState(urlSearch);
   const [statusFilter, setStatusFilter] = useState('');
   const [paymentStatusFilter, setPaymentStatusFilter] = useState('');
   const [paymentMethodFilter, setPaymentMethodFilter] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [ordering, setOrdering] = useState('-created_at');
+
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
+  const [pageSize, setPageSize] = useState(20);
 
   // Modals state
   const [selectedOrderNumber, setSelectedOrderNumber] = useState<string | null>(null);
@@ -64,37 +94,78 @@ export const OrdersPage: React.FC = () => {
   const [newPaymentStatus, setNewPaymentStatus] = useState<PaymentStatus>('pending');
   const [isUpdating, setIsUpdating] = useState(false);
 
+  // 300ms Debounce search input and reset to page 1
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search.trim());
+      setCurrentPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  // Synchronize when URL search param changes (e.g. navigated from customer details)
+  useEffect(() => {
+    const queryParamSearch = searchParams.get('search');
+    if (queryParamSearch !== null && queryParamSearch !== search) {
+      setSearch(queryParamSearch);
+      setDebouncedSearch(queryParamSearch);
+      setCurrentPage(1);
+    }
+  }, [searchParams]);
+
   const fetchOrders = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
       const params: OrderFilterParams = {
-        search: search.trim() || undefined,
+        search: debouncedSearch || undefined,
         status: statusFilter || undefined,
         payment_status: paymentStatusFilter || undefined,
         payment_method: paymentMethodFilter || undefined,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
+        ordering: ordering || undefined,
+        page: currentPage,
       };
 
       const res = await orderService.getOrders(params);
-      if (Array.isArray(res)) {
-        setOrders(res);
-      } else if (res && 'results' in res) {
+      if (res && 'results' in res && Array.isArray(res.results)) {
         setOrders(res.results);
+        setTotalCount(res.count);
+        const pages = res.total_pages || Math.ceil(res.count / (res.page_size || 20)) || 1;
+        setTotalPages(pages);
+        if (res.page_size) setPageSize(res.page_size);
+      } else if (Array.isArray(res)) {
+        setOrders(res);
+        setTotalCount(res.length);
+        setTotalPages(1);
       } else {
         setOrders([]);
+        setTotalCount(0);
+        setTotalPages(1);
       }
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
-  }, [search, statusFilter, paymentStatusFilter, paymentMethodFilter, dateFrom, dateTo]);
+  }, [debouncedSearch, statusFilter, paymentStatusFilter, paymentMethodFilter, dateFrom, dateTo, ordering, currentPage]);
 
   useEffect(() => {
     fetchOrders();
   }, [fetchOrders]);
+
+  const handleClearFilters = () => {
+    setSearch('');
+    setDebouncedSearch('');
+    setStatusFilter('');
+    setPaymentStatusFilter('');
+    setPaymentMethodFilter('');
+    setDateFrom('');
+    setDateTo('');
+    setOrdering('-created_at');
+    setCurrentPage(1);
+  };
 
   const openOrderDetails = async (orderNumber: string) => {
     try {
@@ -136,13 +207,16 @@ export const OrdersPage: React.FC = () => {
     }
   };
 
+  const startItem = totalCount === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const endItem = Math.min(currentPage * pageSize, totalCount);
+
   return (
     <div className="space-y-6">
       {/* Top Banner */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-extrabold text-slate-900 tracking-tight">
-            Customer Orders ({orders.length})
+            Customer Orders ({totalCount})
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
             Process orders, track fulfillment states, review customer addresses and update payment statuses
@@ -169,9 +243,9 @@ export const OrdersPage: React.FC = () => {
 
       {/* Search & Filter Bar */}
       <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm space-y-3">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-2.5">
           {/* Search box */}
-          <div className="relative sm:col-span-2">
+          <div className="relative sm:col-span-2 md:col-span-3 lg:col-span-2">
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input
               type="text"
@@ -182,14 +256,17 @@ export const OrdersPage: React.FC = () => {
             />
           </div>
 
-          {/* Status filter */}
+          {/* Fulfillment Status filter */}
           <div>
             <select
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
+              onChange={(e) => {
+                setStatusFilter(e.target.value);
+                setCurrentPage(1);
+              }}
               className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:border-brand-500 outline-none bg-white text-slate-700"
             >
-              <option value="">All Fulfillment Statuses</option>
+              <option value="">All Fulfillment</option>
               {ORDER_STATUS_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>
                   {opt.label}
@@ -202,11 +279,52 @@ export const OrdersPage: React.FC = () => {
           <div>
             <select
               value={paymentStatusFilter}
-              onChange={(e) => setPaymentStatusFilter(e.target.value)}
+              onChange={(e) => {
+                setPaymentStatusFilter(e.target.value);
+                setCurrentPage(1);
+              }}
               className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:border-brand-500 outline-none bg-white text-slate-700"
             >
-              <option value="">All Payment Statuses</option>
+              <option value="">All Payment</option>
               {PAYMENT_STATUS_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Payment Method filter */}
+          <div>
+            <select
+              value={paymentMethodFilter}
+              onChange={(e) => {
+                setPaymentMethodFilter(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:border-brand-500 outline-none bg-white text-slate-700"
+            >
+              <option value="">All Methods</option>
+              {PAYMENT_METHOD_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Sort By Dropdown */}
+          <div>
+            <select
+              value={ordering}
+              onChange={(e) => {
+                setOrdering(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:border-brand-500 outline-none bg-white text-slate-700 font-medium"
+              title="Sort Orders"
+            >
+              {ORDERING_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>
                   {opt.label}
                 </option>
@@ -219,7 +337,10 @@ export const OrdersPage: React.FC = () => {
             <input
               type="date"
               value={dateFrom}
-              onChange={(e) => setDateFrom(e.target.value)}
+              onChange={(e) => {
+                setDateFrom(e.target.value);
+                setCurrentPage(1);
+              }}
               className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-200 focus:border-brand-500 outline-none text-slate-700"
               title="Date From"
             />
@@ -230,7 +351,10 @@ export const OrdersPage: React.FC = () => {
             <input
               type="date"
               value={dateTo}
-              onChange={(e) => setDateTo(e.target.value)}
+              onChange={(e) => {
+                setDateTo(e.target.value);
+                setCurrentPage(1);
+              }}
               className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-200 focus:border-brand-500 outline-none text-slate-700"
               title="Date To"
             />
@@ -238,19 +362,14 @@ export const OrdersPage: React.FC = () => {
         </div>
 
         {/* Clear Filters Helper */}
-        {(search || statusFilter || paymentStatusFilter || paymentMethodFilter || dateFrom || dateTo) && (
+        {(search || statusFilter || paymentStatusFilter || paymentMethodFilter || dateFrom || dateTo || ordering !== '-created_at') && (
           <div className="flex items-center justify-between text-xs pt-2 border-t border-slate-100">
-            <span className="text-slate-500">Filters applied</span>
+            <span className="text-slate-500">
+              Filters applied &bull; Page {currentPage} of {totalPages}
+            </span>
             <button
-              onClick={() => {
-                setSearch('');
-                setStatusFilter('');
-                setPaymentStatusFilter('');
-                setPaymentMethodFilter('');
-                setDateFrom('');
-                setDateTo('');
-              }}
-              className="font-bold text-brand-600 hover:text-brand-700"
+              onClick={handleClearFilters}
+              className="font-bold text-brand-600 hover:text-brand-700 transition-colors"
             >
               Clear All Filters
             </button>
@@ -365,6 +484,62 @@ export const OrdersPage: React.FC = () => {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/* Pagination Controls */}
+        {totalCount > 0 && (
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-5 py-3.5 bg-white border-t border-slate-100 text-xs">
+            <span className="text-slate-500">
+              Showing <strong className="text-slate-800">{startItem}</strong>–<strong className="text-slate-800">{endItem}</strong> of{' '}
+              <strong className="text-slate-800">{totalCount}</strong> orders
+            </span>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage <= 1 || loading}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-200 bg-white font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:pointer-events-none transition-all shadow-sm"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+                <span>Previous</span>
+              </button>
+
+              <div className="flex items-center gap-1 px-1">
+                {Array.from({ length: totalPages }, (_, i) => i + 1)
+                  .filter((p) => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1)
+                  .map((p, idx, arr) => {
+                    const prev = arr[idx - 1];
+                    return (
+                      <React.Fragment key={p}>
+                        {prev && p - prev > 1 && (
+                          <span className="px-1 text-slate-400 select-none">…</span>
+                        )}
+                        <button
+                          onClick={() => setCurrentPage(p)}
+                          disabled={loading}
+                          className={`w-7 h-7 rounded-lg text-xs font-bold transition-all ${
+                            currentPage === p
+                              ? 'bg-brand-600 text-white shadow-sm'
+                              : 'text-slate-600 hover:bg-slate-100'
+                          }`}
+                        >
+                          {p}
+                        </button>
+                      </React.Fragment>
+                    );
+                  })}
+              </div>
+
+              <button
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage >= totalPages || loading}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-200 bg-white font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:pointer-events-none transition-all shadow-sm"
+              >
+                <span>Next</span>
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
         )}
       </div>

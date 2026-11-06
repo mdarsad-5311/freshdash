@@ -82,6 +82,8 @@ export interface OrderFilterParams {
   search?: string;
   date_from?: string;
   date_to?: string;
+  ordering?: string;
   page?: number;
+  page_size?: number;
 }
 

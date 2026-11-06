@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Plus,
   Trash2,
@@ -8,6 +8,9 @@ import {
   Layers,
   AlertCircle,
   Package,
+  Search,
+  X,
+  RefreshCw,
 } from 'lucide-react';
 import { categoryService } from '../services/categoryService';
 import { AdminCategory, CategoryFormData } from '../types/category';
@@ -23,6 +26,12 @@ export const CategoriesPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
+  // Search & Filter state
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [ordering, setOrdering] = useState('name');
+
   // Modals state
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingCategory, setEditingCategory] = useState<AdminCategory | null>(null);
@@ -35,51 +44,138 @@ export const CategoriesPage: React.FC = () => {
     tint: '#EEF4E8',
     is_active: true,
     image: null,
+    remove_image: false,
   });
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [existingImageUrl, setExistingImageUrl] = useState<string | null>(null);
+  const [removeImageIntent, setRemoveImageIntent] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [formSubmitting, setFormSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  const fetchCategories = async () => {
+  // Debounce search input (300ms)
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedSearch(search.trim());
+    }, 300);
+    return () => clearTimeout(handler);
+  }, [search]);
+
+  // Clean up object URLs to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      if (imagePreview && imagePreview.startsWith('blob:')) {
+        URL.revokeObjectURL(imagePreview);
+      }
+    };
+  }, [imagePreview]);
+
+  const fetchCategories = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      const res = await categoryService.getCategories();
+      const res = await categoryService.getCategories({
+        search: debouncedSearch || undefined,
+        is_active: statusFilter || undefined,
+        ordering,
+      });
       setCategories(res);
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
-  };
+  }, [debouncedSearch, statusFilter, ordering]);
 
   useEffect(() => {
     fetchCategories();
-  }, []);
+  }, [fetchCategories]);
 
   const openCreateModal = () => {
+    // Revoke previous blob if any
+    if (imagePreview && imagePreview.startsWith('blob:')) {
+      URL.revokeObjectURL(imagePreview);
+    }
     setEditingCategory(null);
+    setExistingImageUrl(null);
+    setRemoveImageIntent(false);
     setFormError(null);
+    setImagePreview(null);
     setFormData({
       id: '',
       name: '',
       tint: '#EEF4E8',
       is_active: true,
       image: null,
+      remove_image: false,
     });
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
     setIsFormOpen(true);
   };
 
   const openEditModal = (c: AdminCategory) => {
+    if (imagePreview && imagePreview.startsWith('blob:')) {
+      URL.revokeObjectURL(imagePreview);
+    }
     setEditingCategory(c);
+    setExistingImageUrl(c.image || null);
+    setRemoveImageIntent(false);
     setFormError(null);
+    setImagePreview(c.image || null);
     setFormData({
       id: c.id,
       name: c.name,
       tint: c.tint || '#EEF4E8',
       is_active: c.is_active,
       image: null,
+      remove_image: false,
     });
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
     setIsFormOpen(true);
+  };
+
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] || null;
+    if (file) {
+      if (imagePreview && imagePreview.startsWith('blob:')) {
+        URL.revokeObjectURL(imagePreview);
+      }
+      setFormData((prev) => ({ ...prev, image: file, remove_image: false }));
+      setRemoveImageIntent(false);
+      const newUrl = URL.createObjectURL(file);
+      setImagePreview(newUrl);
+    }
+  };
+
+  const handleRemoveImage = () => {
+    if (imagePreview && imagePreview.startsWith('blob:')) {
+      URL.revokeObjectURL(imagePreview);
+    }
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+
+    // If user currently has a newly selected file (formData.image is File)
+    if (formData.image instanceof File) {
+      // Revert newly selected file; do NOT delete existing server image
+      setFormData((prev) => ({ ...prev, image: null, remove_image: false }));
+      if (existingImageUrl) {
+        setImagePreview(existingImageUrl);
+        setRemoveImageIntent(false);
+      } else {
+        setImagePreview(null);
+        setRemoveImageIntent(false);
+      }
+    } else {
+      // User is explicitly removing the existing server image
+      setImagePreview(null);
+      setRemoveImageIntent(true);
+      setFormData((prev) => ({ ...prev, image: null, remove_image: true }));
+    }
   };
 
   const handleFormSubmit = async (e: React.FormEvent) => {
@@ -94,7 +190,10 @@ export const CategoriesPage: React.FC = () => {
     try {
       setFormSubmitting(true);
       if (editingCategory) {
-        await categoryService.updateCategory(editingCategory.id, formData);
+        await categoryService.updateCategory(editingCategory.id, {
+          ...formData,
+          remove_image: removeImageIntent,
+        });
         setSuccessMessage(`Category "${formData.name}" updated successfully.`);
       } else {
         await categoryService.createCategory(formData);
@@ -165,16 +264,106 @@ export const CategoriesPage: React.FC = () => {
       )}
       {error && <Alert type="error" message={error} onClose={() => setError(null)} />}
 
+      {/* Search & Filters Card */}
+      <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm space-y-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {/* Search box */}
+          <div className="relative lg:col-span-2">
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search by category name or slug..."
+              className="w-full pl-9 pr-8 py-2 text-xs rounded-xl border border-slate-200 focus:border-brand-500 focus:ring-1 focus:ring-brand-500 outline-none"
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          {/* Status filter */}
+          <div>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:border-brand-500 outline-none bg-white text-slate-700"
+            >
+              <option value="">All Statuses</option>
+              <option value="true">Active Only</option>
+              <option value="false">Inactive Only</option>
+            </select>
+          </div>
+
+          {/* Ordering filter */}
+          <div>
+            <select
+              value={ordering}
+              onChange={(e) => setOrdering(e.target.value)}
+              className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:border-brand-500 outline-none bg-white text-slate-700 font-semibold"
+            >
+              <option value="name">Name (A-Z)</option>
+              <option value="-name">Name (Z-A)</option>
+              <option value="-created_at">Recently Added</option>
+              <option value="created_at">Oldest</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Filter Summary & Refresh */}
+        <div className="flex items-center justify-between text-xs text-slate-500 pt-2 border-t border-slate-100">
+          <span className="text-[11px] text-slate-500">
+            Showing <strong className="text-slate-800">{categories.length}</strong> categories
+            {debouncedSearch && (
+              <span>
+                {' '}matching "<strong className="text-slate-800">{debouncedSearch}</strong>"
+              </span>
+            )}
+            {statusFilter === 'true' && ' • Active only'}
+            {statusFilter === 'false' && ' • Inactive only'}
+          </span>
+
+          <button
+            onClick={() => fetchCategories()}
+            className="inline-flex items-center gap-1.5 text-slate-600 hover:text-slate-900"
+          >
+            <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
+            <span>Refresh</span>
+          </button>
+        </div>
+      </div>
+
       {/* Categories Cards Grid */}
       {loading ? (
         <LoadingSpinner size="md" label="Loading produce categories..." className="py-16" />
       ) : categories.length === 0 ? (
         <div className="bg-white rounded-2xl border border-slate-200/80 p-12 text-center">
           <Layers className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-          <h3 className="text-base font-bold text-slate-800">No categories found</h3>
+          <h3 className="text-base font-bold text-slate-800">
+            {debouncedSearch || statusFilter ? 'No matching categories' : 'No categories found'}
+          </h3>
           <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-            Click "Add Category" above to create your first produce category.
+            {debouncedSearch || statusFilter
+              ? 'Try adjusting your search query or status filter.'
+              : 'Click "Add Category" above to create your first produce category.'}
           </p>
+          {(debouncedSearch || statusFilter) && (
+            <button
+              onClick={() => {
+                setSearch('');
+                setStatusFilter('');
+              }}
+              className="mt-4 px-4 py-1.5 text-xs font-bold text-brand-600 hover:text-brand-700 bg-brand-50 hover:bg-brand-100 rounded-xl transition-all"
+            >
+              Reset Filters
+            </button>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -261,7 +450,7 @@ export const CategoriesPage: React.FC = () => {
       <Modal
         isOpen={isFormOpen}
         onClose={() => setIsFormOpen(false)}
-        title={editingCategory ? `Edit Category ${editingCategory.name}` : 'Add New Category'}
+        title={editingCategory ? `Edit Category: ${editingCategory.name}` : 'Add New Category'}
         maxWidth="md"
       >
         <form onSubmit={handleFormSubmit} className="space-y-4">
@@ -318,14 +507,38 @@ export const CategoriesPage: React.FC = () => {
               Category Image
             </label>
             <input
+              ref={fileInputRef}
               type="file"
               accept="image/*"
-              onChange={(e) => {
-                const file = e.target.files?.[0] || null;
-                setFormData({ ...formData, image: file });
-              }}
+              onChange={handleImageChange}
               className="text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-brand-50 file:text-brand-700 hover:file:bg-brand-100"
             />
+
+            {/* Image Preview Area */}
+            {imagePreview && (
+              <div className="mt-3 flex items-center gap-3 p-2.5 bg-slate-50 border border-slate-200/80 rounded-xl">
+                <img
+                  src={imagePreview}
+                  alt="Category preview"
+                  className="w-14 h-14 rounded-lg object-cover border border-slate-200 bg-white shadow-sm shrink-0"
+                />
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-bold text-slate-700">
+                    {formData.image instanceof File ? 'New Image Selected' : 'Current Category Image'}
+                  </p>
+                  <p className="text-[11px] text-slate-400 truncate">
+                    {formData.image instanceof File ? formData.image.name : 'Saved on server'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleRemoveImage}
+                  className="px-2.5 py-1 text-[11px] font-bold text-rose-600 hover:text-rose-700 hover:bg-rose-50 border border-rose-200 rounded-lg transition-all"
+                >
+                  {formData.image instanceof File && existingImageUrl ? 'Revert to Current' : 'Remove Image'}
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="pt-2">

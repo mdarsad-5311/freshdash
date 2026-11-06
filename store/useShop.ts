@@ -1,7 +1,9 @@
 import { create } from 'zustand';
 import { haptics } from '../utils/haptics';
 import { CartItem, BackendCartSummary } from '../types/cart';
+import { Product } from '../types/product';
 import { cartService } from '../services/cartService';
+import { favoriteService } from '../services/favoriteService';
 import { secureStorage } from '../services/secureStorage';
 
 export type { CartItem };
@@ -12,7 +14,12 @@ export interface ShopState {
   summary: BackendCartSummary | null;
   isLoadingCart: boolean;
   cartError: string | null;
+
   favourites: string[];
+  favouriteProducts: Product[];
+  isLoadingFavourites: boolean;
+  favouriteError: string | null;
+
   address: DeliveryAddress;
   walkthroughStep: number | null;
 
@@ -26,18 +33,29 @@ export interface ShopState {
   change: (key: string, delta: number) => Promise<void>;
   remove: (key: string) => Promise<void>;
   clearCart: () => Promise<void>;
-  toggleFavourite: (productId: string) => void;
+
+  // Favorite Actions
+  syncFavouritesWithBackend: () => Promise<void>;
+  resetFavourites: () => void;
+  toggleFavourite: (productId: string, productObj?: Product) => Promise<void>;
 }
 
 export const getCartItemKey = (productId: string, isLarge: boolean) =>
   `${productId}:${isLarge ? 'large' : 'regular'}`;
+
+const pendingFavoriteRequests = new Set<string>();
 
 export const useShop = create<ShopState>((set, get) => ({
   cart: [],
   summary: null,
   isLoadingCart: false,
   cartError: null,
+
   favourites: [],
+  favouriteProducts: [],
+  isLoadingFavourites: false,
+  favouriteError: null,
+
   address: 'Home',
   walkthroughStep: 0,
 
@@ -264,16 +282,111 @@ export const useShop = create<ShopState>((set, get) => ({
     }
   },
 
-  toggleFavourite: (productId) => {
-    set((state) => {
-      const isFav = state.favourites.includes(productId);
-      return {
-        favourites: isFav
-          ? state.favourites.filter((id) => id !== productId)
-          : [...state.favourites, productId],
-      };
+  /**
+   * Syncs user favorites from the backend.
+   */
+  syncFavouritesWithBackend: async () => {
+    try {
+      const token = await secureStorage.getAccessToken();
+      if (!token) return;
+
+      set({ isLoadingFavourites: true, favouriteError: null });
+      const prods = await favoriteService.getFavorites();
+      const ids = Array.from(new Set(prods.map((p) => p.id)));
+
+      set({
+        favourites: ids,
+        favouriteProducts: prods,
+        isLoadingFavourites: false,
+        favouriteError: null,
+      });
+    } catch (err: any) {
+      set({
+        isLoadingFavourites: false,
+        favouriteError: err?.message || 'Failed to sync favourites',
+      });
+    }
+  },
+
+  /**
+   * Clears user favorite state (e.g. on logout).
+   */
+  resetFavourites: () => {
+    set({
+      favourites: [],
+      favouriteProducts: [],
+      isLoadingFavourites: false,
+      favouriteError: null,
+    });
+  },
+
+  /**
+   * Toggles product in favorites.
+   * Optimistically updates UI, then synchronizes with backend if authenticated.
+   */
+  toggleFavourite: async (productId: string, productObj?: Product) => {
+    if (pendingFavoriteRequests.has(productId)) {
+      return;
+    }
+
+    const previousFavourites = get().favourites;
+    const previousProducts = get().favouriteProducts;
+    const isFav = previousFavourites.includes(productId);
+
+    // Optimistic local update
+    const updatedFavourites = isFav
+      ? previousFavourites.filter((id) => id !== productId)
+      : [...previousFavourites, productId];
+
+    let updatedProducts = previousProducts;
+    if (isFav) {
+      updatedProducts = previousProducts.filter((p) => p.id !== productId);
+    } else if (productObj) {
+      if (!previousProducts.some((p) => p.id === productId)) {
+        updatedProducts = [...previousProducts, productObj];
+      }
+    }
+
+    set({
+      favourites: updatedFavourites,
+      favouriteProducts: updatedProducts,
+      favouriteError: null,
     });
     haptics.selection();
+
+    try {
+      const token = await secureStorage.getAccessToken();
+      if (token) {
+        pendingFavoriteRequests.add(productId);
+        try {
+          const res = await favoriteService.toggleFavorite(productId);
+
+          // Reconcile state based on backend response
+          set((state) => {
+            const hasId = state.favourites.includes(productId);
+            if (res.isFavourite && !hasId) {
+              return { favourites: [...state.favourites, productId] };
+            }
+            if (!res.isFavourite && hasId) {
+              return {
+                favourites: state.favourites.filter((id) => id !== productId),
+                favouriteProducts: state.favouriteProducts.filter((p) => p.id !== productId),
+              };
+            }
+            return state;
+          });
+        } finally {
+          pendingFavoriteRequests.delete(productId);
+        }
+      }
+    } catch (err: any) {
+      // Safe rollback on API error
+      set({
+        favourites: previousFavourites,
+        favouriteProducts: previousProducts,
+        favouriteError: err?.message || 'Failed to update favourite status',
+      });
+    }
   },
 }));
 

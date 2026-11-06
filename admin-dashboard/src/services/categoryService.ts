@@ -1,5 +1,5 @@
 import { api } from './api';
-import { AdminCategory, CategoryFormData } from '../types/category';
+import { AdminCategory, CategoryFilterParams, CategoryFormData } from '../types/category';
 
 export interface PaginatedCategoriesResponse {
   count: number;
@@ -10,10 +10,12 @@ export interface PaginatedCategoriesResponse {
 
 export const categoryService = {
   /**
-   * Fetch all categories.
+   * Fetch all categories with optional search, status filtering, and ordering.
    */
-  async getCategories(): Promise<AdminCategory[]> {
-    const response = await api.get<PaginatedCategoriesResponse | AdminCategory[]>('/categories/');
+  async getCategories(params?: CategoryFilterParams): Promise<AdminCategory[]> {
+    const response = await api.get<PaginatedCategoriesResponse | AdminCategory[]>('/categories/', {
+      params,
+    });
     const data = response.data;
     if (data && typeof data === 'object' && 'results' in data && Array.isArray(data.results)) {
       return data.results;
@@ -58,7 +60,11 @@ export const categoryService = {
     if (data.name !== undefined) formData.append('name', data.name);
     if (data.tint !== undefined) formData.append('tint', data.tint);
     if (data.is_active !== undefined) formData.append('is_active', String(data.is_active));
-    if (data.image) formData.append('image', data.image);
+    if (data.image) {
+      formData.append('image', data.image);
+    } else if (data.remove_image) {
+      formData.append('remove_image', 'true');
+    }
 
     const response = await api.patch<AdminCategory>(`/categories/${encodeURIComponent(id)}/`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },

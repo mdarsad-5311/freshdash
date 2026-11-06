@@ -207,13 +207,13 @@ export default function ProductDetailsScreen() {
         }
       >
         <View style={styles.photoContainer}>
-          <ProducePhoto index={product.photo} size={photoSize} />
+          <ProducePhoto index={product.photo} size={photoSize} imageUrl={product.image} />
 
           <Pressable
             accessibilityLabel={
               isFavourite ? 'Remove from favourites' : 'Save to favourites'
             }
-            onPress={() => toggleFavourite(product.id)}
+            onPress={() => toggleFavourite(product.id, product)}
             style={styles.heartButton}
           >
             <Heart

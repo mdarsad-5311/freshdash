@@ -8,6 +8,9 @@ import {
   Shield,
   UserCheck,
   UserX,
+  ChevronLeft,
+  ChevronRight,
+  ArrowUpDown,
 } from 'lucide-react';
 import { customerService } from '../services/customerService';
 import { AdminCustomer, CustomerFilterParams } from '../types/customer';
@@ -17,6 +20,17 @@ import { Badge } from '../components/common/Badge';
 import { Modal } from '../components/common/Modal';
 import { getErrorMessage } from '../services/api';
 
+const ORDERING_OPTIONS = [
+  { value: '-date_joined', label: 'Joined: Newest First' },
+  { value: 'date_joined', label: 'Joined: Oldest First' },
+  { value: '-total_spent', label: 'Spend: High to Low' },
+  { value: 'total_spent', label: 'Spend: Low to High' },
+  { value: '-orders_count', label: 'Orders: High to Low' },
+  { value: 'orders_count', label: 'Orders: Low to High' },
+  { value: 'username', label: 'Username: A to Z' },
+  { value: '-username', label: 'Username: Z to A' },
+];
+
 export const CustomersPage: React.FC = () => {
   const navigate = useNavigate();
   const [customers, setCustomers] = useState<AdminCustomer[]>([]);
@@ -24,44 +38,86 @@ export const CustomersPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  // Filters
+  // Filters & Sorting state
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
   const [activeFilter, setActiveFilter] = useState('');
+  const [ordering, setOrdering] = useState('-date_joined');
+
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
+  const [pageSize, setPageSize] = useState(20);
 
   // Role Change Modal
   const [roleChangeCustomer, setRoleChangeCustomer] = useState<AdminCustomer | null>(null);
   const [selectedRole, setSelectedRole] = useState<'admin' | 'manager' | 'customer'>('customer');
   const [roleUpdating, setRoleUpdating] = useState(false);
 
+  // 300ms Debounce search input and reset to page 1
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search.trim());
+      setCurrentPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
   const fetchCustomers = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
       const params: CustomerFilterParams = {
-        search: search.trim() || undefined,
+        search: debouncedSearch || undefined,
         role: roleFilter || undefined,
         is_active: activeFilter || undefined,
+        ordering: ordering || undefined,
+        page: currentPage,
       };
 
       const res = await customerService.getCustomers(params);
-      if (Array.isArray(res)) {
-        setCustomers(res);
-      } else if (res && 'results' in res) {
+      if (res && 'results' in res && Array.isArray(res.results)) {
         setCustomers(res.results);
+        setTotalCount(res.count);
+        const pages = res.total_pages || Math.ceil(res.count / (res.page_size || 20)) || 1;
+        setTotalPages(pages);
+        if (res.page_size) setPageSize(res.page_size);
+      } else if (Array.isArray(res)) {
+        setCustomers(res);
+        setTotalCount(res.length);
+        setTotalPages(1);
       } else {
         setCustomers([]);
+        setTotalCount(0);
+        setTotalPages(1);
       }
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
-  }, [search, roleFilter, activeFilter]);
+  }, [debouncedSearch, roleFilter, activeFilter, ordering, currentPage]);
 
   useEffect(() => {
     fetchCustomers();
   }, [fetchCustomers]);
+
+  const handleRoleFilterChange = (val: string) => {
+    setRoleFilter(val);
+    setCurrentPage(1);
+  };
+
+  const handleActiveFilterChange = (val: string) => {
+    setActiveFilter(val);
+    setCurrentPage(1);
+  };
+
+  const handleOrderingChange = (val: string) => {
+    setOrdering(val);
+    setCurrentPage(1);
+  };
 
   const handleToggleStatus = async (cust: AdminCustomer) => {
     try {
@@ -90,13 +146,16 @@ export const CustomersPage: React.FC = () => {
     }
   };
 
+  const startItem = totalCount === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const endItem = Math.min(currentPage * pageSize, totalCount);
+
   return (
     <div className="space-y-6">
       {/* Top Banner */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-extrabold text-slate-900 tracking-tight">
-            Customer Directory ({customers.length})
+            Customer Directory ({totalCount})
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
             Registered customer accounts, lifetime spending, order volumes, and account access
@@ -122,7 +181,7 @@ export const CustomersPage: React.FC = () => {
       {error && <Alert type="error" message={error} onClose={() => setError(null)} />}
 
       {/* Filter Bar */}
-      <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="relative">
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
           <input
@@ -137,7 +196,7 @@ export const CustomersPage: React.FC = () => {
         <div>
           <select
             value={roleFilter}
-            onChange={(e) => setRoleFilter(e.target.value)}
+            onChange={(e) => handleRoleFilterChange(e.target.value)}
             className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:border-brand-500 outline-none bg-white text-slate-700"
           >
             <option value="">All Account Roles</option>
@@ -150,12 +209,27 @@ export const CustomersPage: React.FC = () => {
         <div>
           <select
             value={activeFilter}
-            onChange={(e) => setActiveFilter(e.target.value)}
+            onChange={(e) => handleActiveFilterChange(e.target.value)}
             className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:border-brand-500 outline-none bg-white text-slate-700"
           >
             <option value="">All Account Statuses</option>
             <option value="true">Active Accounts</option>
             <option value="false">Blocked / Deactivated</option>
+          </select>
+        </div>
+
+        <div className="relative">
+          <ArrowUpDown className="absolute left-3.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+          <select
+            value={ordering}
+            onChange={(e) => handleOrderingChange(e.target.value)}
+            className="w-full pl-9 pr-3 py-2 text-xs rounded-xl border border-slate-200 focus:border-brand-500 outline-none bg-white text-slate-700 font-semibold"
+          >
+            {ORDERING_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
           </select>
         </div>
       </div>
@@ -290,6 +364,62 @@ export const CustomersPage: React.FC = () => {
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/* Pagination Controls */}
+        {totalCount > 0 && (
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-5 py-3.5 bg-white border-t border-slate-100 text-xs">
+            <span className="text-slate-500">
+              Showing <strong className="text-slate-800">{startItem}</strong>–<strong className="text-slate-800">{endItem}</strong> of{' '}
+              <strong className="text-slate-800">{totalCount}</strong> customers
+            </span>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage <= 1 || loading}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-200 bg-white font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:pointer-events-none transition-all shadow-sm"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+                <span>Previous</span>
+              </button>
+
+              <div className="flex items-center gap-1 px-1">
+                {Array.from({ length: totalPages }, (_, i) => i + 1)
+                  .filter((p) => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1)
+                  .map((p, idx, arr) => {
+                    const prev = arr[idx - 1];
+                    return (
+                      <React.Fragment key={p}>
+                        {prev && p - prev > 1 && (
+                          <span className="px-1 text-slate-400 select-none">…</span>
+                        )}
+                        <button
+                          onClick={() => setCurrentPage(p)}
+                          disabled={loading}
+                          className={`w-7 h-7 rounded-lg text-xs font-bold transition-all ${
+                            currentPage === p
+                              ? 'bg-brand-600 text-white shadow-sm'
+                              : 'text-slate-600 hover:bg-slate-100'
+                          }`}
+                        >
+                          {p}
+                        </button>
+                      </React.Fragment>
+                    );
+                  })}
+              </div>
+
+              <button
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage >= totalPages || loading}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-200 bg-white font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:pointer-events-none transition-all shadow-sm"
+              >
+                <span>Next</span>
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
         )}
       </div>

@@ -53,5 +53,6 @@ export const API_ENDPOINTS = {
   ADDRESSES: '/addresses/',
   FAVORITES: '/favorites/',
   COUPONS: '/coupons/',
+  FAQS: '/faqs/',
 } as const;
 

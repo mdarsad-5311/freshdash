@@ -1,7 +1,19 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 
-// Resolve base API URL from environment variable or default fallback
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1';
+// Resolve base API URL from environment variable or production fallback
+const resolveBaseUrl = (): string => {
+  const envUrl = import.meta.env.VITE_API_BASE_URL;
+  if (envUrl && typeof envUrl === 'string' && envUrl.trim()) {
+    return envUrl.trim();
+  }
+  // Production fallback: strictly use live PythonAnywhere backend, never localhost
+  if (import.meta.env.PROD) {
+    return 'https://mdarsad5311.pythonanywhere.com/api/v1';
+  }
+  return 'http://127.0.0.1:8000/api/v1';
+};
+
+const BASE_URL = resolveBaseUrl();
 
 export const ADMIN_API_BASE = `${BASE_URL.replace(/\/+$/, '')}/admin`;
 

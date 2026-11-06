@@ -1,6 +1,7 @@
 import { api } from './api';
 import {
   BatchStockAdjustPayload,
+  InventoryFilterParams,
   InventoryListResponse,
   StockAdjustmentPayload,
 } from '../types/inventory';
@@ -8,12 +9,9 @@ import { AdminProduct } from '../types/product';
 
 export const inventoryService = {
   /**
-   * Fetch inventory items, low stock warnings, and out of stock counts.
+   * Fetch inventory items, low stock warnings, out of stock counts, with pagination, sorting and filters.
    */
-  async getInventory(params?: {
-    filter?: 'low_stock' | 'out_of_stock' | 'in_stock' | '';
-    search?: string;
-  }): Promise<InventoryListResponse> {
+  async getInventory(params?: InventoryFilterParams): Promise<InventoryListResponse> {
     const response = await api.get<InventoryListResponse>('/inventory/', {
       params,
     });
@@ -41,4 +39,3 @@ export const inventoryService = {
     return response.data;
   },
 };
-

@@ -368,7 +368,7 @@ export default function HomeScreen() {
             </View>
           </View>
           <View style={styles.seasonalPhoto}>
-            <ProducePhoto index={seasonalProduct?.photo ?? 6} size={110} />
+            <ProducePhoto index={seasonalProduct?.photo ?? 6} size={110} imageUrl={seasonalProduct?.image} />
           </View>
         </Pressable>
 

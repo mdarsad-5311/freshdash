@@ -34,6 +34,7 @@ export interface CustomerFilterParams {
   role?: string;
   is_active?: boolean | string;
   search?: string;
+  ordering?: string;
   page?: number;
 }
 

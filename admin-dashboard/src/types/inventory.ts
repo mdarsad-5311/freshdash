@@ -14,10 +14,24 @@ export interface InventoryItem {
 
 export interface InventoryListResponse {
   success: boolean;
+  count: number;
   total_items: number;
+  total_pages: number;
+  current_page: number;
+  page_size: number;
   low_stock_count: number;
   out_of_stock_count: number;
   inventory: InventoryItem[];
+  results?: InventoryItem[];
+}
+
+export interface InventoryFilterParams {
+  filter?: 'low_stock' | 'out_of_stock' | 'in_stock' | '';
+  search?: string;
+  category?: string;
+  ordering?: string;
+  page?: number;
+  page_size?: number;
 }
 
 export interface StockAdjustmentPayload {
@@ -29,4 +43,3 @@ export interface StockAdjustmentPayload {
 export interface BatchStockAdjustPayload {
   adjustments: StockAdjustmentPayload[];
 }
-

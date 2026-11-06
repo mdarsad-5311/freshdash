@@ -226,8 +226,9 @@ export const CustomerDetailPage: React.FC = () => {
                   customer.recent_orders.map((ord) => (
                     <tr
                       key={ord.id}
-                      onClick={() => navigate('/orders')}
+                      onClick={() => navigate(`/orders?search=${encodeURIComponent(ord.order_number)}`)}
                       className="hover:bg-slate-50/80 cursor-pointer transition-colors"
+                      title={`Filter orders by #${ord.order_number}`}
                     >
                       <td className="px-5 py-3.5 font-bold font-mono text-slate-900">
                         #{ord.order_number}

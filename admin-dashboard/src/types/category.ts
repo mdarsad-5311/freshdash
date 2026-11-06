@@ -17,5 +17,12 @@ export interface CategoryFormData {
   tint?: string;
   is_active?: boolean;
   image?: File | null;
+  remove_image?: boolean;
+}
+
+export interface CategoryFilterParams {
+  search?: string;
+  is_active?: boolean | string;
+  ordering?: string;
 }
 
